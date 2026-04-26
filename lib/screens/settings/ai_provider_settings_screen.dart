@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../models/ai_provider_profile.dart';
+import '../../models/app_update_models.dart';
 import '../../services/ai/ai_model_catalog.dart';
 import '../../services/ai/ai_provider_router.dart';
 import '../../services/ai/ai_provider_store.dart';
+import '../../services/update_service.dart';
 import '../../services/token/token_service.dart';
 import 'ai_provider_edit_screen.dart';
+import 'widgets/update_settings_card.dart';
 
 class AiProviderSettingsScreen extends StatefulWidget {
   const AiProviderSettingsScreen({super.key});
@@ -21,9 +24,15 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
     store: _store,
     tokenService: TokenService(),
   );
+  final UpdateService _updateService = UpdateService();
 
   bool _loading = true;
+  bool _checkingForUpdates = false;
   List<AiProviderProfile> _profiles = const [];
+  UpdateSettings _updateSettings = const UpdateSettings(
+    frequency: UpdateFrequency.weekly,
+  );
+  UpdateCheckResult? _latestUpdateResult;
 
   @override
   void initState() {
@@ -35,7 +44,7 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI Providers'),
+        title: const Text('Settings'),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _loading ? null : _openAddProvider,
@@ -52,6 +61,15 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        UpdateSettingsCard(
+          settings: _updateSettings,
+          isChecking: _checkingForUpdates,
+          latestResult: _latestUpdateResult,
+          onFrequencyChanged: _changeUpdateFrequency,
+          onCheckPressed: _checkForUpdates,
+          onInstallPressed: _installUpdate,
+        ),
+        const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -163,10 +181,12 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
     });
 
     final profiles = await _store.getProfiles();
+    final updateSettings = await _updateService.loadSettings();
 
     if (!mounted) return;
     setState(() {
       _profiles = profiles;
+      _updateSettings = updateSettings;
       _loading = false;
     });
   }
@@ -272,5 +292,90 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
     }
 
     return '$displayLabel ($rawModel)';
+  }
+
+  Future<void> _changeUpdateFrequency(UpdateFrequency? frequency) async {
+    if (frequency == null) return;
+
+    await _updateService.saveFrequency(frequency);
+    final latest = await _updateService.loadSettings();
+
+    if (!mounted) return;
+    setState(() {
+      _updateSettings = latest;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Update frequency set to ${frequency.displayLabel}')),
+    );
+  }
+
+  Future<void> _checkForUpdates() async {
+    setState(() {
+      _checkingForUpdates = true;
+    });
+
+    try {
+      final result = await _updateService.checkForUpdates(ignoreSchedule: true);
+      if (!mounted) return;
+      setState(() {
+        _latestUpdateResult = result;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Update check failed: $e')),
+      );
+    } finally {
+      if (mounted) {
+        final latest = await _updateService.loadSettings();
+        setState(() {
+          _updateSettings = latest;
+          _checkingForUpdates = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _installUpdate(UpdateInfo info) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Install Update'),
+        content: Text(
+          'Download and launch version ${info.latestVersion}? The installer will start after the current app closes.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Install'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await _updateService.launchInstaller(info);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Update downloaded. Close the app and the installer will launch automatically.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to launch update: $e')),
+      );
+    }
   }
 }

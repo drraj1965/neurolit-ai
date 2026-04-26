@@ -53,51 +53,53 @@ class LocalBackendLauncherService {
   }
 
   Future<void> _startBackend(Uri baseUri) async {
-    final projectRoot = _findProjectRoot();
-    if (projectRoot == null) {
-      throw Exception(
-        'The app could not locate the local NeuroLit project folder needed to start the engineering backend automatically.',
-      );
-    }
-
-    final launcherFile = File(_joinPath(projectRoot.path, 'backend', 'run_backend.ps1'));
-    if (!launcherFile.existsSync()) {
-      throw Exception(
-        'The engineering backend launcher was not found at:\n${launcherFile.path}',
-      );
-    }
-
-    final powershellExe = _resolvePowerShellExecutable();
     final bindHost = baseUri.host.toLowerCase() == 'localhost'
         ? '127.0.0.1'
         : baseUri.host;
     final port = baseUri.hasPort ? baseUri.port : 8000;
+    final target = _findLaunchTarget();
 
-    final result = await Process.run(
-      powershellExe,
-      [
-        '-NoProfile',
-        '-WindowStyle',
-        'Hidden',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        launcherFile.path,
-        '-BindHost',
-        bindHost,
-        '-Port',
-        '$port',
-      ],
-      workingDirectory: projectRoot.path,
-    ).timeout(const Duration(seconds: 45));
-
-    if (result.exitCode != 0) {
-      final details = _preferredOutput(result.stderr, result.stdout);
+    if (target == null) {
       throw Exception(
-        details.isEmpty
-            ? 'The engineering backend could not be started automatically.'
-            : details,
+        'The app could not locate a local engineering backend package or launcher script.',
       );
+    }
+
+    if (target.type == _BackendLaunchType.packagedExe) {
+      await Process.start(
+        target.path,
+        ['--host', bindHost, '--port', '$port'],
+        workingDirectory: target.workingDirectory,
+        mode: ProcessStartMode.detached,
+      );
+    } else {
+      final powershellExe = _resolvePowerShellExecutable();
+      final result = await Process.run(
+        powershellExe,
+        [
+          '-NoProfile',
+          '-WindowStyle',
+          'Hidden',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          target.path,
+          '-BindHost',
+          bindHost,
+          '-Port',
+          '$port',
+        ],
+        workingDirectory: target.workingDirectory,
+      ).timeout(const Duration(seconds: 45));
+
+      if (result.exitCode != 0) {
+        final details = _preferredOutput(result.stderr, result.stdout);
+        throw Exception(
+          details.isEmpty
+              ? 'The engineering backend could not be started automatically.'
+              : details,
+        );
+      }
     }
 
     final ready = await _waitForHealthy(baseUri);
@@ -133,33 +135,64 @@ class LocalBackendLauncherService {
     }
   }
 
-  Directory? _findProjectRoot() {
-    final roots = <String>{};
+  _BackendLaunchTarget? _findLaunchTarget() {
+    final roots = <Directory>{};
 
-    roots.add(Directory.current.path);
+    roots.add(Directory.current.absolute);
 
     try {
-      roots.add(File(Platform.resolvedExecutable).parent.path);
+      roots.add(File(Platform.resolvedExecutable).parent.absolute);
     } catch (_) {
-      // Ignore and fall back to other candidates.
+      // Ignore and fall back to the current directory.
     }
 
     for (final root in roots) {
-      final match = _walkUpToProjectRoot(Directory(root));
-      if (match != null) {
-        return match;
+      final packaged = _findUpward(
+        root,
+        ['backend_runtime', 'neurolit_backend.exe'],
+      );
+      if (packaged != null) {
+        return _BackendLaunchTarget(
+          type: _BackendLaunchType.packagedExe,
+          path: packaged.path,
+          workingDirectory: packaged.parent.path,
+        );
+      }
+
+      final packagedDev = _findUpward(
+        root,
+        ['backend', 'dist', 'neurolit_backend', 'neurolit_backend.exe'],
+      );
+      if (packagedDev != null) {
+        return _BackendLaunchTarget(
+          type: _BackendLaunchType.packagedExe,
+          path: packagedDev.path,
+          workingDirectory: packagedDev.parent.path,
+        );
+      }
+
+      final script = _findUpward(
+        root,
+        ['backend', 'run_backend.ps1'],
+      );
+      if (script != null) {
+        return _BackendLaunchTarget(
+          type: _BackendLaunchType.powershellScript,
+          path: script.path,
+          workingDirectory: script.parent.parent.path,
+        );
       }
     }
 
     return null;
   }
 
-  Directory? _walkUpToProjectRoot(Directory start) {
+  File? _findUpward(Directory start, List<String> relativeParts) {
     var current = start.absolute;
     for (var depth = 0; depth < 8; depth++) {
-      final launcherPath = _joinPath(current.path, 'backend', 'run_backend.ps1');
-      if (File(launcherPath).existsSync()) {
-        return current;
+      final candidate = File(_joinPath(current.path, relativeParts));
+      if (candidate.existsSync()) {
+        return candidate;
       }
 
       final parent = current.parent;
@@ -175,13 +208,12 @@ class LocalBackendLauncherService {
   String _resolvePowerShellExecutable() {
     final windowsDir = Platform.environment['WINDIR'];
     if (windowsDir != null && windowsDir.trim().isNotEmpty) {
-      final candidate = _joinPath(
-        windowsDir,
+      final candidate = _joinPath(windowsDir, [
         'System32',
         'WindowsPowerShell',
         'v1.0',
         'powershell.exe',
-      );
+      ]);
       if (File(candidate).existsSync()) {
         return candidate;
       }
@@ -199,14 +231,24 @@ class LocalBackendLauncherService {
     return stdout?.toString().trim() ?? '';
   }
 
-  String _joinPath(String first, String second, [String? third, String? fourth, String? fifth]) {
-    final parts = <String>[first, second];
-    for (final value in [third, fourth, fifth]) {
-      if (value != null) {
-        parts.add(value);
-      }
-    }
-
-    return parts.join(Platform.pathSeparator);
+  String _joinPath(String root, List<String> parts) {
+    return <String>[root, ...parts].join(Platform.pathSeparator);
   }
+}
+
+enum _BackendLaunchType {
+  packagedExe,
+  powershellScript,
+}
+
+class _BackendLaunchTarget {
+  const _BackendLaunchTarget({
+    required this.type,
+    required this.path,
+    required this.workingDirectory,
+  });
+
+  final _BackendLaunchType type;
+  final String path;
+  final String workingDirectory;
 }

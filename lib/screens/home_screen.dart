@@ -20,6 +20,7 @@ import '../services/slide_structure_service.dart';
 import '../services/summary_service.dart';
 import '../services/token/token_service.dart';
 import '../services/ui/modal_service.dart';
+import '../services/update_service.dart';
 import '../widgets/layman/layman_panel.dart';
 import 'home/widgets/articles_list_panel.dart';
 import 'home/widgets/doctor_output_panel.dart';
@@ -51,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final SummaryService summary = SummaryService();
   final ModeWorkspaceService workspaceService = ModeWorkspaceService();
   final CollectionService collectionService = CollectionService();
+  final UpdateService updateService = UpdateService();
 
   List<Article> articles = [];
   Set<String> selectedPmids = {};
@@ -103,6 +105,9 @@ class _HomeScreenState extends State<HomeScreen> {
     loadRecentSearches();
     loadCollections();
     loadAvailableRunProviders();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _runScheduledUpdateCheck();
+    });
   }
 
   List<Article> get pagedArticles {
@@ -263,6 +268,29 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       summary: summary,
     );
+  }
+
+  Future<void> _runScheduledUpdateCheck() async {
+    try {
+      final result = await updateService.checkForUpdates(ignoreSchedule: false);
+      if (!mounted ||
+          result.wasSkippedBySchedule ||
+          !result.isUpdateAvailable ||
+          result.updateInfo == null) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Update ${result.updateInfo!.latestVersion} is available. Open Settings to install it.',
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    } catch (_) {
+      // Background update checks should not interrupt normal app use.
+    }
   }
 
   Future<void> openAiProviderSettings() async {
