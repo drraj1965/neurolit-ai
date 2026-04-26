@@ -1,0 +1,145 @@
+﻿import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+
+  List<Article> articles = [];
+  Set<int> selected = {};
+
+  final TextEditingController controller = TextEditingController();
+
+  void search() async {
+    final result = await api.searchArticles(controller.text);
+    setState(() {
+      articles = result;
+      selected.clear();
+    });
+  }
+
+  String formatAMA(Article a) {
+    String authors = a.authors.split(",").take(3).join(", ") +
+        (a.authors.split(",").length > 3 ? ", et al" : "");
+
+    return authors +
+        ". " +
+        a.title +
+        ". " +
+        a.journal +
+        ". " +
+        a.date +
+        ". doi:" +
+        (a.link.isNotEmpty ? a.link : "");
+  }
+
+  void generateSummary() async {
+
+    final selectedArticles = selected.map((i) => articles[i]).toList();
+
+    if (selectedArticles.isEmpty) return;
+
+    final abstracts = selectedArticles.map((a) => a.abstractText).toList();
+
+    showDialog(
+      context: context,
+      builder: (_) => Center(child: CircularProgressIndicator()),
+    );
+
+    final result = await summary.generateMultiArticleSummary(abstracts);
+
+    Navigator.pop(context);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text("AI SYNTHESIS"),
+        content: SingleChildScrollView(child: Text(result)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit AI - Phase 4.5")),
+      body: Column(
+        children: [
+
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+          ),
+
+          ElevatedButton(
+            onPressed: generateSummary,
+            child: Text("Generate AI Summary (Selected)"),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return Card(
+                  child: ListTile(
+                    leading: Checkbox(
+                      value: selected.contains(index),
+                      onChanged: (val) {
+                        setState(() {
+                          if (val!) {
+                            selected.add(index);
+                          } else {
+                            selected.remove(index);
+                          }
+                        });
+                      },
+                    ),
+                    title: Text(a.title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(a.authors),
+                        Text(formatAMA(a)),
+                        GestureDetector(
+                          child: Text(
+                            a.link,
+                            style: TextStyle(color: Colors.blue),
+                          ),
+                          onTap: () {},
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}

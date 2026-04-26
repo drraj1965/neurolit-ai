@@ -1,0 +1,76 @@
+﻿import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+class SummaryService {
+  Future<String> generateAISummary(String abstractText) async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('openai_api_key') ?? '';
+
+    if (apiKey.trim().isEmpty) {
+      return 'âš ï¸ Please save your OpenAI API key first.';
+    }
+
+    if (abstractText.trim().isEmpty) {
+      return 'âš ï¸ No abstract was available for this article.';
+    }
+
+    final url = Uri.parse('https://api.openai.com/v1/chat/completions');
+
+    final prompt = '''
+You are a senior consultant neurologist helping another neurologist review the literature.
+
+Analyze the following medical abstract and produce a clinically useful structured summary with these exact headings:
+
+BACKGROUND:
+OBJECTIVE:
+METHODS:
+RESULTS:
+LIMITATIONS:
+CLINICAL TAKEAWAY:
+
+Rules:
+- Be faithful to the abstract only.
+- Do not invent details not present.
+- Be concise but meaningful.
+- If some section is not clearly stated, say "Not clearly stated in abstract."
+
+ABSTRACT:
+$abstractText
+''';
+
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+      },
+      body: jsonEncode({
+        'model': 'gpt-4o-mini',
+        'messages': [
+          {
+            'role': 'user',
+            'content': prompt,
+          }
+        ],
+        'temperature': 0.2
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final content = data['choices']?[0]?['message']?['content'];
+
+      if (content is String && content.trim().isNotEmpty) {
+        return content.trim();
+      }
+
+      return 'âš ï¸ The AI response was empty.';
+    } else {
+      return 'OpenAI API error (' +
+          response.statusCode.toString() +
+          '): ' +
+          response.body;
+    }
+  }
+}

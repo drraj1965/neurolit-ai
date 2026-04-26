@@ -1,0 +1,610 @@
+﻿import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+
+  List<Article> articles = [];
+  Set<int> selected = {};
+
+  final TextEditingController controller = TextEditingController();
+
+  String currentSessionFile = "";
+  String dateFilter = "1y";
+  bool autoExpand = false;
+
+  DateTimeRange? customRange;
+
+  List<Map<String, dynamic>> recentSearches = [];
+
+  int currentPage = 0;
+  final int pageSize = 10;
+
+  @override
+  void initState() {
+    super.initState();
+    loadRecentSearches();
+  }
+
+  Future<void> loadRecentSearches() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList('recent_searches_v1') ?? [];
+
+    final parsed = raw.map((e) {
+      try {
+        return jsonDecode(e) as Map<String, dynamic>;
+      } catch (_) {
+        return <String, dynamic>{};
+      }
+    }).where((e) => e.isNotEmpty).toList();
+
+    if (!mounted) return;
+    setState(() {
+      recentSearches = parsed;
+    });
+  }
+
+  Future<void> saveRecentSearch(
+    String query,
+    String filter, {
+    DateTimeRange? range,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final entry = <String, dynamic>{
+      'query': query,
+      'filter': filter,
+      'from': range?.start.toIso8601String(),
+      'to': range?.end.toIso8601String(),
+    };
+
+    recentSearches.removeWhere((e) =>
+        e['query'] == entry['query'] &&
+        e['filter'] == entry['filter'] &&
+        e['from'] == entry['from'] &&
+        e['to'] == entry['to']);
+
+    recentSearches.insert(0, entry);
+
+    if (recentSearches.length > 10) {
+      recentSearches = recentSearches.take(10).toList();
+    }
+
+    await prefs.setStringList(
+      'recent_searches_v1',
+      recentSearches.map((e) => jsonEncode(e)).toList(),
+    );
+
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> applyRecentSearch(Map<String, dynamic> entry) async {
+    controller.text = (entry['query'] ?? '').toString();
+
+    final filter = (entry['filter'] ?? '1y').toString();
+    DateTimeRange? range;
+
+    final from = entry['from']?.toString();
+    final to = entry['to']?.toString();
+
+    if (from != null && to != null && from.isNotEmpty && to.isNotEmpty) {
+      range = DateTimeRange(
+        start: DateTime.parse(from),
+        end: DateTime.parse(to),
+      );
+    }
+
+    setState(() {
+      dateFilter = filter;
+      customRange = range;
+    });
+
+    await search();
+  }
+
+  Future<void> pickCustomDateRange() async {
+    final now = DateTime.now();
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(1900),
+      lastDate: now,
+      initialDateRange: customRange,
+    );
+
+    if (picked != null) {
+      setState(() {
+        customRange = picked;
+        dateFilter = 'custom';
+      });
+    }
+  }
+
+  String customRangeLabel() {
+    if (customRange == null) return "Pick date range";
+    return _fmtDate(customRange!.start) + " â†’ " + _fmtDate(customRange!.end);
+  }
+
+  String _fmtDate(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  Future<void> createSessionFile(String query) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory(dir.path + "/NeuroLit");
+
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    final file = File(
+      folder.path +
+          "/Session_" +
+          DateTime.now().millisecondsSinceEpoch.toString() +
+          ".txt",
+    );
+
+    String header = "SEARCH: " + query + "\nDATE FILTER: " + dateFilter;
+    if (dateFilter == 'custom' && customRange != null) {
+      header += "\nFROM: " + _fmtDate(customRange!.start) + "\nTO: " + _fmtDate(customRange!.end);
+    }
+    header += "\n\n";
+
+    await file.writeAsString(header);
+    currentSessionFile = file.path;
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Session created")),
+    );
+  }
+
+  Future<void> appendToSession(String text) async {
+    if (currentSessionFile.isEmpty) return;
+
+    final file = File(currentSessionFile);
+    if (!await file.exists()) return;
+
+    await file.writeAsString("\n\n" + text, mode: FileMode.append);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Saved to session")),
+    );
+  }
+
+  Future<void> openPubMedLink(String link) async {
+    if (link.trim().isEmpty) return;
+
+    final uri = Uri.parse(link);
+
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Could not open PubMed link")),
+      );
+    }
+  }
+
+  Future<void> search() async {
+    final query = controller.text.trim();
+    if (query.isEmpty) return;
+
+    if (dateFilter == 'custom' && customRange == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please pick a custom date range first")),
+      );
+      return;
+    }
+
+    await saveRecentSearch(query, dateFilter, range: customRange);
+    await createSessionFile(query);
+
+    final result = await api.searchArticles(
+      query,
+      dateFilter,
+      fallback: autoExpand,
+      customFrom: customRange?.start,
+      customTo: customRange?.end,
+    );
+
+    if (result.isEmpty) {
+      final hint = await api.getLatestArticleHint(query);
+
+      if (!mounted) return;
+      setState(() {
+        articles = [];
+        selected.clear();
+        currentPage = 0;
+      });
+
+      await appendToSession("NO RESULTS\n\n" + hint);
+
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text("No results found"),
+          content: SelectableText(hint),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Close"),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      articles = result;
+      selected.clear();
+      currentPage = 0;
+    });
+
+    final buffer = StringBuffer();
+    buffer.writeln("RESULTS:");
+    buffer.writeln();
+
+    for (final a in result) {
+      buffer.writeln(a.title);
+      buffer.writeln(a.authors);
+      buffer.writeln(a.journal + " â€¢ " + a.date);
+      buffer.writeln("PMID: " + a.pmid);
+      buffer.writeln(a.link);
+      buffer.writeln();
+    }
+
+    await appendToSession(buffer.toString());
+  }
+
+  void openAbstract(Article a) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(a.title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(a.authors),
+              const SizedBox(height: 8),
+              Text(a.journal + " â€¢ " + a.date),
+              const SizedBox(height: 8),
+              SelectableText(a.abstractText),
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () => openPubMedLink(a.link),
+                child: Text(
+                  a.link,
+                  style: const TextStyle(
+                    color: Colors.blue,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => appendToSession(a.abstractText),
+            child: const Text("Save"),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: a.abstractText));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Abstract copied")),
+              );
+            },
+            child: const Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () => openPubMedLink(a.link),
+            child: const Text("Open in PubMed"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> generateSummary() async {
+    final selectedArticles = selected.map((i) => articles[i]).toList();
+    if (selectedArticles.isEmpty) return;
+
+    final result = await summary.generateMultiArticleSummary(
+      selectedArticles
+          .map(
+            (a) => {
+              "title": a.title,
+              "authors": a.authors,
+              "abstract": a.abstractText,
+            },
+          )
+          .toList(),
+    );
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("AI SUMMARY"),
+        content: SingleChildScrollView(
+          child: SelectableText(result),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => appendToSession(result),
+            child: const Text("Save"),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: result));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Summary copied")),
+              );
+            },
+            child: const Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String previewSnippet(String abstractText) {
+    final lines = abstractText
+        .split('\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    if (lines.isEmpty) return "No abstract available.";
+    return lines.first;
+  }
+
+  List<Article> get pagedArticles {
+    final start = currentPage * pageSize;
+    if (start >= articles.length) return [];
+    final end = (start + pageSize) > articles.length
+        ? articles.length
+        : (start + pageSize);
+    return articles.sublist(start, end);
+  }
+
+  int get totalPages {
+    if (articles.isEmpty) return 1;
+    return ((articles.length - 1) ~/ pageSize) + 1;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("NeuroLit AI"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.description),
+            onPressed: () {
+              if (currentSessionFile.isNotEmpty) {
+                Process.start('notepad.exe', [currentSessionFile]);
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.folder),
+            onPressed: () async {
+              final dir = await getApplicationDocumentsDirectory();
+              final folderPath = dir.path + "/NeuroLit";
+              Process.start('explorer.exe', [folderPath.replaceAll('/', '\\')]);
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+            onSubmitted: (_) => search(),
+          ),
+
+          if (recentSearches.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: recentSearches.map((entry) {
+                    final query = (entry['query'] ?? '').toString();
+                    final filter = (entry['filter'] ?? '').toString();
+                    final label = filter == 'custom'
+                        ? query + " â€¢ custom"
+                        : query + " â€¢ " + filter;
+
+                    return ActionChip(
+                      label: Text(label),
+                      onPressed: () => applyRecentSearch(entry),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+
+          DropdownButton<String>(
+            value: dateFilter,
+            items: const [
+              DropdownMenuItem(value: "1w", child: Text("1 Week")),
+              DropdownMenuItem(value: "1m", child: Text("1 Month")),
+              DropdownMenuItem(value: "3m", child: Text("3 Months")),
+              DropdownMenuItem(value: "6m", child: Text("6 Months")),
+              DropdownMenuItem(value: "1y", child: Text("1 Year")),
+              DropdownMenuItem(value: "5y", child: Text("5 Years")),
+              DropdownMenuItem(value: "all", child: Text("All Time")),
+              DropdownMenuItem(value: "custom", child: Text("Custom Range")),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() {
+                dateFilter = v;
+              });
+            },
+          ),
+
+          if (dateFilter == 'custom')
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(customRangeLabel()),
+                  ),
+                  ElevatedButton(
+                    onPressed: pickCustomDateRange,
+                    child: const Text("Pick Range"),
+                  ),
+                ],
+              ),
+            ),
+
+          CheckboxListTile(
+            title: const Text("Auto-expand search by 1 year if empty"),
+            value: autoExpand,
+            onChanged: (v) {
+              setState(() {
+                autoExpand = v ?? false;
+              });
+            },
+          ),
+
+          ElevatedButton(
+            onPressed: generateSummary,
+            child: const Text("Generate AI Summary"),
+          ),
+
+          if (articles.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: currentPage > 0
+                        ? () {
+                            setState(() {
+                              currentPage--;
+                            });
+                          }
+                        : null,
+                    child: const Text("Previous"),
+                  ),
+                  const SizedBox(width: 12),
+                  Text("Page ${currentPage + 1} of $totalPages"),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: currentPage < totalPages - 1
+                        ? () {
+                            setState(() {
+                              currentPage++;
+                            });
+                          }
+                        : null,
+                    child: const Text("Next"),
+                  ),
+                ],
+              ),
+            ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: pagedArticles.length,
+              itemBuilder: (context, index) {
+                final a = pagedArticles[index];
+                final originalIndex = articles.indexOf(a);
+
+                return ListTile(
+                  leading: Checkbox(
+                    value: selected.contains(originalIndex),
+                    onChanged: (val) {
+                      setState(() {
+                        if (val == true) {
+                          selected.add(originalIndex);
+                        } else {
+                          selected.remove(originalIndex);
+                        }
+                      });
+                    },
+                  ),
+                  title: Text(a.title),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.authors),
+                      Text(a.journal + " â€¢ " + a.date),
+                      Text("PMID: " + a.pmid),
+                      const SizedBox(height: 4),
+                      Text(
+                        previewSnippet(a.abstractText),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      InkWell(
+                        onTap: () => openPubMedLink(a.link),
+                        child: Text(
+                          a.link,
+                          style: const TextStyle(
+                            color: Colors.blue,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  onTap: () => openAbstract(a),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

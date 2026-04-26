@@ -1,0 +1,73 @@
+﻿import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+class SummaryService {
+
+  Future<String> generateMultiArticleSummary(List<Map<String, String>> articles) async {
+
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('openai_api_key') ?? '';
+
+    if (apiKey.isEmpty) {
+      return "âš ï¸ API key not set.";
+    }
+
+    String compiled = "";
+
+    for (var a in articles) {
+      compiled += "TITLE: " + a["title"]! + "\n";
+      compiled += "AUTHORS: " + a["authors"]! + "\n";
+      compiled += "ABSTRACT: " + a["abstract"]! + "\n\n---\n\n";
+    }
+
+    final prompt = """
+You are a senior neurologist.
+
+Perform a multi-paper synthesis.
+
+STRICT RULES:
+- Every statement MUST reference the source paper (Author, Year)
+- DO NOT generalize without citation
+- DO NOT invent findings
+- Use only provided abstracts
+
+OUTPUT FORMAT:
+
+OVERVIEW OF EVIDENCE
+
+CONSISTENT FINDINGS (with citations)
+
+CONFLICTING RESULTS (with citations)
+
+STRENGTH OF EVIDENCE
+
+CLINICAL RECOMMENDATION (with cited support)
+
+DATA:
+$compiled
+""";
+
+    final response = await http.post(
+      Uri.parse("https://api.openai.com/v1/chat/completions"),
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $apiKey",
+      },
+      body: jsonEncode({
+        "model": "gpt-4o-mini",
+        "messages": [
+          {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data['choices'][0]['message']['content'];
+    } else {
+      return "Error generating synthesis.";
+    }
+  }
+}

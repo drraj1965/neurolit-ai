@@ -1,0 +1,186 @@
+﻿import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+
+  List<Article> articles = [];
+
+  final TextEditingController controller = TextEditingController();
+  final TextEditingController keyController = TextEditingController();
+
+  bool obscureApiKey = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadApiKey();
+  }
+
+  Future<void> _loadApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('openai_api_key') ?? '';
+    setState(() {
+      keyController.text = saved;
+    });
+  }
+
+  Future<void> saveApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('openai_api_key', keyController.text.trim());
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('API key saved successfully.')),
+    );
+  }
+
+  Future<void> search() async {
+    final q = controller.text.trim();
+    if (q.isEmpty) return;
+
+    final result = await api.searchArticles(q);
+    setState(() {
+      articles = result;
+    });
+  }
+
+  Future<void> openAiSummary(Article a) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final aiSummary = await summary.generateAISummary(a.abstractText);
+
+    if (!mounted) return;
+    Navigator.pop(context);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(a.title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(a.authors),
+              const SizedBox(height: 6),
+              Text(a.journal + ' (' + a.date + ')'),
+              const SizedBox(height: 14),
+              const Text(
+                'AI SUMMARY',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              SelectableText(aiSummary),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('NeuroLit AI - Phase 4'),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            child: TextField(
+              controller: keyController,
+              obscureText: obscureApiKey,
+              decoration: InputDecoration(
+                hintText: 'Enter OpenAI API key',
+                border: const OutlineInputBorder(),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: obscureApiKey ? 'Show key' : 'Hide key',
+                      icon: Icon(
+                        obscureApiKey ? Icons.visibility : Icons.visibility_off,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          obscureApiKey = !obscureApiKey;
+                        });
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Save API key',
+                      icon: const Icon(Icons.save),
+                      onPressed: saveApiKey,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            child: TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: 'Search topic',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.search),
+                  onPressed: search,
+                ),
+              ),
+              onSubmitted: (_) => search(),
+            ),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+                final a = articles[index];
+
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: ListTile(
+                    title: Text(a.title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 4),
+                        Text(a.authors),
+                        Text(a.journal + ' (' + a.date + ')'),
+                      ],
+                    ),
+                    onTap: () => openAiSummary(a),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

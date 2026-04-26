@@ -1,0 +1,246 @@
+# ==============================
+# PHASE 5.1 FIX (RESTORE + UPGRADE)
+# ==============================
+
+Write-Host "=== PHASE 5.1 FIX ==="
+
+$BackupDir = "_phase5_1_backup"
+
+if (Test-Path $BackupDir) {
+    Remove-Item $BackupDir -Recurse -Force
+}
+
+New-Item -ItemType Directory -Path $BackupDir | Out-Null
+
+$homeFile = "lib/screens/home_screen.dart"
+
+Copy-Item $homeFile "$BackupDir/home_screen.dart.bak"
+
+Write-Host "Backup created."
+
+# ==============================
+# PATCH: FULL FEATURE HOME SCREEN
+# ==============================
+
+@'
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../services/export_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+  final ExportService export = ExportService();
+
+  List<Article> articles = [];
+  Set<int> selected = {};
+
+  final TextEditingController controller = TextEditingController();
+
+  void search() async {
+    final result = await api.searchArticles(controller.text);
+    setState(() {
+      articles = result;
+      selected.clear();
+    });
+  }
+
+  String formatAMA(Article a) {
+
+    List authorsList = a.authors.split(",");
+    String authors = authorsList.length > 3
+        ? authorsList.take(3).join(", ") + ", et al"
+        : a.authors;
+
+    return authors +
+        ". " +
+        a.title +
+        ". " +
+        a.journal +
+        ". " +
+        a.date +
+        ".";
+  }
+
+  void openAbstract(Article a) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(a.title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(a.authors),
+              Text(a.journal + " (" + a.date + ")"),
+              SizedBox(height: 10),
+              SelectableText(a.abstractText),
+              SizedBox(height: 15),
+              SelectableText(a.link, style: TextStyle(color: Colors.blue)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: a.abstractText));
+            },
+            child: Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void generateReview() async {
+
+    final selectedArticles = selected.map((i) => articles[i]).toList();
+
+    if (selectedArticles.isEmpty) return;
+
+    final data = selectedArticles.map((a) => {
+      "title": a.title,
+      "authors": a.authors,
+      "abstract": a.abstractText
+    }).toList();
+
+    showDialog(
+      context: context,
+      builder: (_) => Center(child: CircularProgressIndicator()),
+    );
+
+    final aiText = await summary.generateMultiArticleSummary(data);
+
+    Navigator.pop(context);
+
+    String refs = "";
+    int i = 1;
+
+    for (var a in selectedArticles) {
+      refs += "[" + i.toString() + "] " + formatAMA(a) + "\n\n";
+      i++;
+    }
+
+    final review = aiText + "\n\nREFERENCES:\n\n" + refs;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text("REVIEW ARTICLE"),
+        content: SingleChildScrollView(
+          child: SelectableText(review),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: review));
+            },
+            child: Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () {
+              export.exportDocx(review);
+            },
+            child: Text("DOCX"),
+          ),
+          TextButton(
+            onPressed: () {
+              export.exportTxt(review);
+            },
+            child: Text("TXT"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit AI - Phase 5.1")),
+      body: Column(
+        children: [
+
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+          ),
+
+          Row(
+            children: [
+              ElevatedButton(
+                onPressed: generateReview,
+                child: Text("Generate Review"),
+              ),
+            ],
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return Card(
+                  child: ListTile(
+                    leading: Checkbox(
+                      value: selected.contains(index),
+                      onChanged: (val) {
+                        setState(() {
+                          if (val!) selected.add(index);
+                          else selected.remove(index);
+                        });
+                      },
+                    ),
+                    title: Text(a.title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(a.authors),
+                        Text(a.journal + " (" + a.date + ")"),
+                        SizedBox(height: 5),
+                        Text(formatAMA(a)),
+                      ],
+                    ),
+                    onTap: () => openAbstract(a),
+                  ),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}
+'@ | Set-Content $homeFile -Encoding UTF8
+
+Write-Host ""
+Write-Host "✅ PHASE 5.1 FIX COMPLETE"
+Write-Host "Run:"
+Write-Host "flutter run -d windows"

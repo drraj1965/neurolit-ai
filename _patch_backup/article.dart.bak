@@ -1,0 +1,15 @@
+class Article {
+  final String title;
+  final String abstractText;
+  final String journal;
+  final String date;
+  final String link;
+
+  Article({
+    required this.title,
+    required this.abstractText,
+    required this.journal,
+    required this.date,
+    required this.link,
+  });
+}

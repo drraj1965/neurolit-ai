@@ -1,0 +1,264 @@
+﻿import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+
+  List<Article> articles = [];
+  Set<int> selected = {};
+
+  final TextEditingController controller = TextEditingController();
+
+  String currentSessionFile = "";
+  String dateFilter = "1y";
+
+  // ==============================
+  // SESSION SYSTEM (CLEAN)
+  // ==============================
+
+  Future<void> createSessionFile(String query) async {
+    final dir = await getApplicationDocumentsDirectory();
+
+    final folder = Directory(dir.path + "/NeuroLit");
+
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    final file = File(
+      folder.path + "/Session_" +
+      DateTime.now().millisecondsSinceEpoch.toString() + ".txt"
+    );
+
+    await file.writeAsString("SEARCH: " + query + "\n\n");
+
+    currentSessionFile = file.path;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Session created")),
+    );
+  }
+
+  Future<void> appendToSession(String text) async {
+    if (currentSessionFile.isEmpty) return;
+
+    final file = File(currentSessionFile);
+
+    if (!await file.exists()) return;
+
+    await file.writeAsString("\n\n" + text, mode: FileMode.append);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Saved to session")),
+    );
+  }
+
+  // ==============================
+  // SEARCH
+  // ==============================
+
+  void search() async {
+    final query = controller.text;
+
+    await createSessionFile(query);
+
+    final result = await api.searchArticles(query, dateFilter);
+
+    setState(() {
+      articles = result;
+      selected.clear();
+    });
+
+    String listText = "RESULTS:\n\n";
+
+    for (var a in result) {
+      listText += a.title + "\n" + a.authors + "\n\n";
+    }
+
+    await appendToSession(listText);
+  }
+
+  // ==============================
+  // ABSTRACT VIEW
+  // ==============================
+
+  void openAbstract(Article a) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(a.title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(a.authors),
+              SizedBox(height: 8),
+              SelectableText(a.abstractText),
+              SizedBox(height: 10),
+              SelectableText(a.link, style: TextStyle(color: Colors.blue)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => appendToSession(a.abstractText),
+            child: Text("Save"),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: a.abstractText));
+            },
+            child: Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==============================
+  // AI SUMMARY
+  // ==============================
+
+  void generateSummary() async {
+
+    final selectedArticles = selected.map((i) => articles[i]).toList();
+
+    if (selectedArticles.isEmpty) return;
+
+    final result = await summary.generateMultiArticleSummary(
+      selectedArticles.map((a) => {
+        "title": a.title,
+        "authors": a.authors,
+        "abstract": a.abstractText
+      }).toList()
+    );
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text("AI SUMMARY"),
+        content: SingleChildScrollView(
+          child: SelectableText(result),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => appendToSession(result),
+            child: Text("Save"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==============================
+  // UI
+  // ==============================
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("NeuroLit AI"),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.description),
+            onPressed: () {
+              if (currentSessionFile.isNotEmpty) {
+                Process.start(currentSessionFile, []);
+              }
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.folder),
+            onPressed: () async {
+              final dir = await getApplicationDocumentsDirectory();
+              Process.start(dir.path + "/NeuroLit", []);
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+          ),
+
+          DropdownButton<String>(
+            value: dateFilter,
+            items: [
+              DropdownMenuItem(value: "1w", child: Text("1 Week")),
+              DropdownMenuItem(value: "1m", child: Text("1 Month")),
+              DropdownMenuItem(value: "3m", child: Text("3 Months")),
+              DropdownMenuItem(value: "6m", child: Text("6 Months")),
+              DropdownMenuItem(value: "1y", child: Text("1 Year")),
+            ],
+            onChanged: (v) {
+              setState(() {
+                dateFilter = v!;
+              });
+            },
+          ),
+
+          ElevatedButton(
+            onPressed: generateSummary,
+            child: Text("Generate AI Summary"),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return ListTile(
+                  leading: Checkbox(
+                    value: selected.contains(index),
+                    onChanged: (val) {
+                      setState(() {
+                        if (val!) selected.add(index);
+                        else selected.remove(index);
+                      });
+                    },
+                  ),
+                  title: Text(a.title),
+                  subtitle: Text(a.authors),
+                  onTap: () => openAbstract(a),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}

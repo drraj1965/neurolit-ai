@@ -1,0 +1,414 @@
+# ==============================
+# PHASE 5.5 REPAIR — FULL home_screen.dart REPLACEMENT
+# ==============================
+
+Write-Host "=== PHASE 5.5 REPAIR (HOME SCREEN) ==="
+
+$BackupDir = "_phase5_5_repair_backup"
+
+if (Test-Path $BackupDir) {
+    Remove-Item $BackupDir -Recurse -Force
+}
+
+New-Item -ItemType Directory -Path $BackupDir | Out-Null
+
+$homeFile = "lib/screens/home_screen.dart"
+
+if (Test-Path $homeFile) {
+    Copy-Item $homeFile "$BackupDir/home_screen.dart.bak"
+}
+
+Write-Host "Backup created."
+
+@'
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+
+  List<Article> articles = [];
+  Set<int> selected = {};
+
+  final TextEditingController controller = TextEditingController();
+
+  String currentSessionFile = "";
+  String dateFilter = "1y";
+  bool autoExpand = false;
+
+  Future<void> createSessionFile(String query) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory(dir.path + "/NeuroLit");
+
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    final file = File(
+      folder.path +
+          "/Session_" +
+          DateTime.now().millisecondsSinceEpoch.toString() +
+          ".txt",
+    );
+
+    await file.writeAsString("SEARCH: " + query + "\nDATE FILTER: " + dateFilter + "\n\n");
+    currentSessionFile = file.path;
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Session created")),
+    );
+  }
+
+  Future<void> appendToSession(String text) async {
+    if (currentSessionFile.isEmpty) return;
+
+    final file = File(currentSessionFile);
+    if (!await file.exists()) return;
+
+    await file.writeAsString("\n\n" + text, mode: FileMode.append);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Saved to session")),
+    );
+  }
+
+  Future<void> openPubMedLink(String link) async {
+    if (link.trim().isEmpty) return;
+
+    final uri = Uri.parse(link);
+
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Could not open PubMed link")),
+      );
+    }
+  }
+
+  Future<void> search() async {
+    final query = controller.text.trim();
+    if (query.isEmpty) return;
+
+    await createSessionFile(query);
+
+    final result = await api.searchArticles(
+      query,
+      dateFilter,
+      fallback: autoExpand,
+    );
+
+    if (result.isEmpty) {
+      final hint = await api.getLatestArticleHint(query);
+
+      if (!mounted) return;
+      setState(() {
+        articles = [];
+        selected.clear();
+      });
+
+      await appendToSession("NO RESULTS\n\n" + hint);
+
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text("No results found"),
+          content: SelectableText(hint),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Close"),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      articles = result;
+      selected.clear();
+    });
+
+    final buffer = StringBuffer();
+    buffer.writeln("RESULTS:");
+    buffer.writeln();
+
+    for (final a in result) {
+      buffer.writeln(a.title);
+      buffer.writeln(a.authors);
+      buffer.writeln(a.journal + " • " + a.date);
+      buffer.writeln("PMID: " + a.pmid);
+      buffer.writeln(a.link);
+      buffer.writeln();
+    }
+
+    await appendToSession(buffer.toString());
+  }
+
+  void openAbstract(Article a) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(a.title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(a.authors),
+              const SizedBox(height: 8),
+              Text(a.journal + " • " + a.date),
+              const SizedBox(height: 8),
+              SelectableText(a.abstractText),
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () => openPubMedLink(a.link),
+                child: Text(
+                  a.link,
+                  style: const TextStyle(
+                    color: Colors.blue,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => appendToSession(a.abstractText),
+            child: const Text("Save"),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: a.abstractText));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Abstract copied")),
+              );
+            },
+            child: const Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () => openPubMedLink(a.link),
+            child: const Text("Open in PubMed"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> generateSummary() async {
+    final selectedArticles = selected.map((i) => articles[i]).toList();
+    if (selectedArticles.isEmpty) return;
+
+    final result = await summary.generateMultiArticleSummary(
+      selectedArticles
+          .map(
+            (a) => {
+              "title": a.title,
+              "authors": a.authors,
+              "abstract": a.abstractText,
+            },
+          )
+          .toList(),
+    );
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("AI SUMMARY"),
+        content: SingleChildScrollView(
+          child: SelectableText(result),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => appendToSession(result),
+            child: const Text("Save"),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: result));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Summary copied")),
+              );
+            },
+            child: const Text("Copy"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String previewSnippet(String abstractText) {
+    final lines = abstractText
+        .split('\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    if (lines.isEmpty) return "No abstract available.";
+    return lines.first;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("NeuroLit AI"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.description),
+            onPressed: () {
+              if (currentSessionFile.isNotEmpty) {
+                Process.start('notepad.exe', [currentSessionFile]);
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.folder),
+            onPressed: () async {
+              final dir = await getApplicationDocumentsDirectory();
+              final folderPath = dir.path + "/NeuroLit";
+              Process.start('explorer.exe', [folderPath.replaceAll('/', '\\')]);
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+            onSubmitted: (_) => search(),
+          ),
+
+          DropdownButton<String>(
+            value: dateFilter,
+            items: const [
+              DropdownMenuItem(value: "1w", child: Text("1 Week")),
+              DropdownMenuItem(value: "1m", child: Text("1 Month")),
+              DropdownMenuItem(value: "3m", child: Text("3 Months")),
+              DropdownMenuItem(value: "6m", child: Text("6 Months")),
+              DropdownMenuItem(value: "1y", child: Text("1 Year")),
+              DropdownMenuItem(value: "5y", child: Text("5 Years")),
+              DropdownMenuItem(value: "all", child: Text("All Time")),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() {
+                dateFilter = v;
+              });
+            },
+          ),
+
+          CheckboxListTile(
+            title: const Text("Auto-expand search by 1 year if empty"),
+            value: autoExpand,
+            onChanged: (v) {
+              setState(() {
+                autoExpand = v ?? false;
+              });
+            },
+          ),
+
+          ElevatedButton(
+            onPressed: generateSummary,
+            child: const Text("Generate AI Summary"),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+                final a = articles[index];
+
+                return ListTile(
+                  leading: Checkbox(
+                    value: selected.contains(index),
+                    onChanged: (val) {
+                      setState(() {
+                        if (val == true) {
+                          selected.add(index);
+                        } else {
+                          selected.remove(index);
+                        }
+                      });
+                    },
+                  ),
+                  title: Text(a.title),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.authors),
+                      Text(a.journal + " • " + a.date),
+                      Text("PMID: " + a.pmid),
+                      const SizedBox(height: 4),
+                      Text(
+                        previewSnippet(a.abstractText),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      InkWell(
+                        onTap: () => openPubMedLink(a.link),
+                        child: Text(
+                          a.link,
+                          style: const TextStyle(
+                            color: Colors.blue,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  onTap: () => openAbstract(a),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+'@ | Set-Content $homeFile -Encoding UTF8
+
+Write-Host ""
+Write-Host "✅ home_screen.dart replaced with stable clickable-link version"
+Write-Host ""
+Write-Host "Rollback if needed:"
+Write-Host "Copy-Item $BackupDir\home_screen.dart.bak lib\screens\home_screen.dart -Force"
+Write-Host ""
+Write-Host "Now run:"
+Write-Host "flutter run -d windows"	

@@ -1,0 +1,103 @@
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
+
+class FullTextService {
+
+  Future<String> downloadFullText({
+    required String pmid,
+    required String title,
+    required String pmcId,
+  }) async {
+
+    final baseDir = await getApplicationDocumentsDirectory();
+
+    final now = DateTime.now();
+    final year = now.year.toString();
+    final month = _monthName(now.month);
+    final dayFolder = "${now.day} $month $year";
+
+    final folder = Directory(
+      "${baseDir.path}/NeuroLit/FullText/$year/$month/$dayFolder"
+    );
+
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    // 🔍 Check ALL previous downloads
+    final existing = await _findExistingFile(baseDir, pmid);
+    if (existing != null) {
+      return "Already downloaded:\n${existing.path}";
+    }
+
+    // 🧾 Create file (placeholder for now)
+    // 📄 Try downloading PDF from PMC
+if (pmcId.isNotEmpty) {
+  final pdfUrl =
+      "https://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/pdf/";
+
+  try {
+    final response = await HttpClient().getUrl(Uri.parse(pdfUrl))
+        .then((req) => req.close());
+
+    final bytes = await consolidateHttpClientResponseBytes(response);
+
+// 🔍 Check if real PDF (must start with %PDF)
+final isPdf = bytes.length > 4 &&
+    bytes[0] == 0x25 &&
+    bytes[1] == 0x50 &&
+    bytes[2] == 0x44 &&
+    bytes[3] == 0x46;
+
+if (response.statusCode == 200 && isPdf) {
+  final file = File("${folder.path}/$pmid.pdf");
+  await file.writeAsBytes(bytes);
+
+  return "PDF downloaded:\n${file.path}";
+}
+  } catch (e) {
+    // fallback handled below
+  }
+}
+
+// 🧾 Fallback: save metadata if PDF fails
+final file = File("${folder.path}/$pmid.txt");
+
+var content = "";
+content += "PMID: $pmid\n";
+content += "TITLE: $title\n";
+content += "PMC: $pmcId\n";
+content += "PDF LINK:\nhttps://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/\n";
+content += "DOWNLOADED: ${DateTime.now()}\n";
+
+await file.writeAsString(content);
+
+return "Saved (PDF not directly accessible):\n${file.path}";
+
+    }
+
+  // 🔍 Scan ALL folders for existing PMID
+  Future<File?> _findExistingFile(Directory baseDir, String pmid) async {
+    final root = Directory("${baseDir.path}/NeuroLit/FullText");
+
+    if (!await root.exists()) return null;
+
+    final files = root.listSync(recursive: true);
+
+    for (var f in files) {
+      if (f is File && f.path.contains(pmid)) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  String _monthName(int m) {
+    const names = [
+      "January","February","March","April","May","June",
+      "July","August","September","October","November","December"
+    ];
+    return names[m - 1];
+  }
+}

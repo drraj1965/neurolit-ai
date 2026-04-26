@@ -1,0 +1,96 @@
+﻿Future<String> downloadFullText({
+  required String pmid,
+  required String title,
+  required String pmcId,
+}) async {
+  try {
+    final now = DateTime.now();
+
+    final year = DateFormat('yyyy').format(now);
+    final monthName = DateFormat('MMMM').format(now);
+    final dayFolder = DateFormat('d MMMM yyyy').format(now);
+
+    final rootDir = Directory(
+      'C:/Users/${Platform.environment['USERNAME']}/Documents/NeuroLit/FullText',
+    );
+
+    if (!await rootDir.exists()) {
+      await rootDir.create(recursive: true);
+    }
+
+    final baseDir = Directory(
+      '${rootDir.path}/$year/$monthName/$dayFolder',
+    );
+
+    if (!await baseDir.exists()) {
+      await baseDir.create(recursive: true);
+    }
+
+    final monthDir = Directory('${rootDir.path}/$year/$monthName');
+    if (!await monthDir.exists()) {
+      await monthDir.create(recursive: true);
+    }
+
+    final monthFile = File(
+      '${monthDir.path}/downloads_${monthName}_$year.txt',
+    );
+
+    if (!await monthFile.exists()) {
+      await monthFile.create(recursive: true);
+    }
+
+    // Check ALL monthly index files across all years/months
+    final indexFiles = await rootDir
+        .list(recursive: true)
+        .where((entity) =>
+            entity is File &&
+            entity.path.toLowerCase().contains('downloads_') &&
+            entity.path.toLowerCase().endsWith('.txt'))
+        .cast<File>()
+        .toList();
+
+    for (final file in indexFiles) {
+      final content = await file.readAsString();
+      if (content.contains('PMID: $pmid')) {
+        final lines = content.split('\n');
+        String foundPath = '';
+
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].trim() == 'PMID: $pmid') {
+            for (int j = i; j < i + 8 && j < lines.length; j++) {
+              if (lines[j].startsWith('PATH: ')) {
+                foundPath = lines[j].replaceFirst('PATH: ', '').trim();
+                break;
+              }
+            }
+            break;
+          }
+        }
+
+        return "ALREADY_EXISTS::$foundPath";
+      }
+    }
+
+    final url = "https://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/pdf/";
+    final filePath = "${baseDir.path}/$pmid.pdf";
+
+    final file = File(filePath);
+    await file.writeAsString("PDF SOURCE:\n$url");
+
+    final entry = """
+============================================================
+PMID: $pmid
+TITLE: $title
+PATH: $filePath
+DATE: ${now.toString()}
+============================================================
+
+""";
+
+    await monthFile.writeAsString(entry, mode: FileMode.append);
+
+    return "DOWNLOADED::$filePath";
+  } catch (e) {
+    return "ERROR::$e";
+  }
+}

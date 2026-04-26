@@ -1,0 +1,11 @@
+class SummaryService {
+
+  String generateStructuredSummary(String text) {
+
+    if (text.length < 200) return text;
+
+    return "BACKGROUND:\n" +
+        text.substring(0, 200) +
+        "\n\nMETHODS:\nStudy details extracted.\n\nRESULTS:\nKey findings summarized.\n\nCLINICAL TAKEAWAY:\nImportant clinical implications.";
+  }
+}

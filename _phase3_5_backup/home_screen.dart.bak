@@ -1,0 +1,115 @@
+import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../services/export_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+  final ExportService export = ExportService();
+
+  List<Article> articles = [];
+  List<String> history = [];
+
+  final TextEditingController controller = TextEditingController();
+
+  void search() async {
+
+    final query = controller.text;
+
+    if (!history.contains(query)) {
+      history.add(query);
+    }
+
+    final result = await api.searchArticles(query);
+
+    setState(() {
+      articles = result;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit Review - Phase 3")),
+      body: Column(
+        children: [
+
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search (stroke AND thrombectomy)",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+          ),
+
+          Wrap(
+            children: history.map((h) =>
+              TextButton(
+                onPressed: () {
+                  controller.text = h;
+                  search();
+                },
+                child: Text(h),
+              )
+            ).toList(),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return Card(
+                  child: ListTile(
+                    title: Text(a.title),
+                    subtitle: Text(a.authors),
+                    onTap: () {
+
+                      final refined = summary.generateStructuredSummary(a.abstractText);
+
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: Text("Refined Summary"),
+                          content: SingleChildScrollView(
+                            child: Text(refined),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                export.exportAll(refined);
+                              },
+                              child: Text("Export"),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: Text("Close"),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}

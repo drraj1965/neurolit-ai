@@ -1,0 +1,102 @@
+import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  List<Article> articles = [];
+
+  final topics = [
+    "stroke",
+    "epilepsy",
+    "migraine",
+    "parkinson disease",
+    "alzheimer disease"
+  ];
+
+  void search(String topic) async {
+    final result = await api.searchArticles(topic);
+    setState(() {
+      articles = result;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit Review")),
+      body: Column(
+        children: [
+
+          Wrap(
+            children: topics.map((t) =>
+              ElevatedButton(
+                onPressed: () => search(t),
+                child: Text(t),
+              )
+            ).toList(),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return Card(
+                  child: ListTile(
+                    title: Text(a.title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(a.authors),
+                        Text(a.journal + " (" + a.date + ")"),
+                        SizedBox(height: 5),
+                        Text(a.abstractText),
+                      ],
+                    ),
+                    onTap: () {
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: Text(a.title),
+                          content: SingleChildScrollView(
+                            child: Column(
+                              children: [
+                                Text(a.authors),
+                                Text(a.journal + " (" + a.date + ")"),
+                                SizedBox(height: 10),
+                                Text(a.abstractText),
+                              ],
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {},
+                              child: Text("Open in PubMed"),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: Text("Close"),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}

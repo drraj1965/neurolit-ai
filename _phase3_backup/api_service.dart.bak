@@ -1,0 +1,50 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../models/article.dart';
+
+class ApiService {
+
+  Future<List<Article>> searchArticles(String query, String years) async {
+
+    String dateFilter = "";
+    if (years == "1") dateFilter = " AND 2025:2026[pdat]";
+    if (years == "5") dateFilter = " AND 2020:2026[pdat]";
+    if (years == "10") dateFilter = " AND 2015:2026[pdat]";
+
+    final searchUrl = Uri.parse(
+      "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=20&term=" + query + dateFilter
+    );
+
+    final searchRes = await http.get(searchUrl);
+    final searchData = json.decode(searchRes.body);
+
+    List ids = searchData['esearchresult']['idlist'];
+
+    if (ids.isEmpty) return [];
+
+    final summaryUrl = Uri.parse(
+      "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=" + ids.join(",")
+    );
+
+    final summaryRes = await http.get(summaryUrl);
+    final summaryData = json.decode(summaryRes.body);
+
+    List<Article> articles = [];
+
+    for (var id in ids) {
+      var item = summaryData['result'][id];
+
+      articles.add(Article(
+        title: item['title'] ?? '',
+        abstractText: "Abstract loading in Phase 3",
+        journal: item['fulljournalname'] ?? '',
+        date: item['pubdate'] ?? '',
+        authors: (item['authors'] as List).map((a) => a['name']).join(", "),
+        pmid: id,
+        link: "https://pubmed.ncbi.nlm.nih.gov/" + id,
+      ));
+    }
+
+    return articles;
+  }
+}

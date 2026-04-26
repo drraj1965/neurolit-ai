@@ -1,0 +1,37 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../models/article.dart';
+
+class ApiService {
+
+  Future<List<Article>> searchArticles(String query) async {
+
+    final url = Uri.parse(
+      "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=" + query + "&format=json&pageSize=20"
+    );
+
+    final response = await http.get(url);
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+
+      List<Article> articles = [];
+
+      for (var item in data['resultList']['result']) {
+        articles.add(Article(
+          title: item['title'] ?? '',
+          abstractText: item['abstractText'] ?? 'No abstract available',
+          journal: item['journalTitle'] ?? '',
+          date: item['firstPublicationDate'] ?? '',
+          link: item['doi'] != null
+              ? "https://doi.org/" + item['doi']
+              : "",
+        ));
+      }
+
+      return articles;
+    } else {
+      throw Exception("Failed to fetch articles");
+    }
+  }
+}

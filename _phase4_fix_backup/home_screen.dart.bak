@@ -1,0 +1,108 @@
+import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../models/article.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+
+  List<Article> articles = [];
+
+  final TextEditingController controller = TextEditingController();
+  final TextEditingController keyController = TextEditingController();
+
+  void saveApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('openai_api_key', keyController.text);
+  }
+
+  void search() async {
+    final result = await api.searchArticles(controller.text);
+    setState(() {
+      articles = result;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit AI - Phase 4")),
+      body: Column(
+        children: [
+
+          TextField(
+            controller: keyController,
+            decoration: InputDecoration(
+              hintText: "Enter OpenAI API Key",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.save),
+                onPressed: saveApiKey,
+              ),
+            ),
+          ),
+
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return ListTile(
+                  title: Text(a.title),
+                  onTap: () async {
+
+                    showDialog(
+                      context: context,
+                      builder: (_) => Center(child: CircularProgressIndicator()),
+                    );
+
+                    final aiSummary = await summary.generateAISummary(a.abstractText);
+
+                    Navigator.pop(context);
+
+                    showDialog(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: Text("AI Summary"),
+                        content: SingleChildScrollView(
+                          child: Text(aiSummary),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: Text("Close"),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}

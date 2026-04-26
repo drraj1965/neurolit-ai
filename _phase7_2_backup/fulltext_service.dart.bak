@@ -1,0 +1,223 @@
+﻿import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+class FullTextService {
+String _safeFileName(String input) {
+  final cleaned = input
+      .replaceAll(RegExp(r'[<>:"/\\|?*]'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  if (cleaned.length > 120) {
+    return cleaned.substring(0, 120);
+  }
+  return cleaned;
+}
+
+Future<void> _createDummyPdf(String path) async {
+  final file = File(path);
+
+  if (await file.exists()) return;
+
+  final minimalPdf = [
+    0x25,0x50,0x44,0x46,0x2D,0x31,0x2E,0x34,0x0A,
+    0x25,0xE2,0xE3,0xCF,0xD3,0x0A,
+    0x31,0x20,0x30,0x20,0x6F,0x62,0x6A,0x0A,
+    0x3C,0x3C,0x2F,0x54,0x79,0x70,0x65,0x2F,0x43,0x61,0x74,0x61,0x6C,0x6F,0x67,0x3E,0x3E,0x0A,
+    0x65,0x6E,0x64,0x6F,0x62,0x6A,0x0A,
+    0x78,0x72,0x65,0x66,0x0A,
+    0x30,0x20,0x31,0x0A,
+    0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x20,0x36,0x35,0x35,0x33,0x35,0x20,0x66,0x20,0x0A,
+    0x74,0x72,0x61,0x69,0x6C,0x65,0x72,0x0A,
+    0x3C,0x3C,0x2F,0x52,0x6F,0x6F,0x74,0x20,0x31,0x20,0x30,0x20,0x52,0x3E,0x3E,0x0A,
+    0x73,0x74,0x61,0x72,0x74,0x78,0x72,0x65,0x66,0x0A,
+    0x30,0x0A,
+    0x25,0x25,0x45,0x4F,0x46
+  ];
+
+  await file.writeAsBytes(minimalPdf);
+}
+  Future<String> downloadFullText({
+    required String pmid,
+    required String title,
+    required String pmcId,
+  }) async {
+    final baseDir = await getApplicationDocumentsDirectory();
+
+    final now = DateTime.now();
+    final year = now.year.toString();
+    final month = _monthName(now.month);
+    final dayFolder = "${now.day} $month $year";
+
+    final folder = Directory(
+      "${baseDir.path}/NeuroLit/FullText/$year/$month/$dayFolder",
+    );
+
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    final existingMarker = await _findExistingMarker(baseDir, pmid);
+    if (existingMarker != null) {
+      final previousFolder = existingMarker.parent.path;
+      return "Already prepared before.\nFolder:\n$previousFolder";
+    }
+
+    final articleUrl = pmcId.isNotEmpty
+        ? "https://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/"
+        : "";
+
+    String? pdfUrl;
+    if (articleUrl.isNotEmpty) {
+      final html = await _fetchText(articleUrl);
+      if (html != null && html.isNotEmpty) {
+        pdfUrl = _extractPdfUrlFromHtml(html, pmcId);
+      }
+    }
+
+    pdfUrl ??= pmcId.isNotEmpty
+        ? "https://pmc.ncbi.nlm.nih.gov/articles/$pmcId/pdf/main.pdf"
+        : articleUrl;
+
+    await Clipboard.setData(ClipboardData(text: pdfUrl));
+    final safeTitle = _safeFileName(title);
+    final dummyPdfPath = "${folder.path}/$safeTitle.pdf";
+
+    await _createDummyPdf(dummyPdfPath);
+
+    final uri = Uri.parse(pdfUrl);
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    final marker = File("${folder.path}/${pmid}_manual_download.txt");
+
+    final content = StringBuffer()
+      ..writeln("PMID: $pmid")
+      ..writeln("TITLE: $title")
+      ..writeln("PMC: $pmcId")
+      ..writeln("ARTICLE URL: $articleUrl")
+      ..writeln("PDF URL: $pdfUrl")
+      ..writeln("TARGET FOLDER: ${folder.path}")
+      ..writeln("BROWSER OPENED: $opened")
+      ..writeln("DOWNLOADED: ${DateTime.now()}")
+      ..writeln()
+      ..writeln("INSTRUCTION:")
+      ..writeln("PDF opened in browser.")
+      ..writeln("Please download or print the file into this folder:")
+      ..writeln(folder.path);
+
+    await marker.writeAsString(content.toString());
+
+    if (!opened) {
+      return "PDF URL copied to clipboard.\nCould not open browser automatically.\nSave file into:\n${folder.path}";
+    }
+
+    return "PDF opened in browser.\nURL copied to clipboard.\nPlease save into:\n${folder.path}";
+  }
+
+  Future<File?> _findExistingMarker(Directory baseDir, String pmid) async {
+    final root = Directory("${baseDir.path}/NeuroLit/FullText");
+
+    if (!await root.exists()) return null;
+
+    final files = root.listSync(recursive: true);
+    for (final f in files) {
+      if (f is File &&
+          f.path.contains(pmid) &&
+          f.path.endsWith("_manual_download.txt")) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _fetchText(String url) async {
+    try {
+      final client = HttpClient();
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(HttpHeaders.userAgentHeader, "Mozilla/5.0");
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        client.close(force: true);
+        return null;
+      }
+
+      final bytes = await consolidateBytes(response);
+      client.close(force: true);
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _extractPdfUrlFromHtml(String html, String pmcId) {
+    final patterns = <RegExp>[
+      RegExp(r'href="([^"]*/pdf/[^"]+\.pdf)"', caseSensitive: false),
+      RegExp(r"href='([^']*/pdf/[^']+\.pdf)'", caseSensitive: false),
+      RegExp(r'data-pdf-url="([^"]+\.pdf)"', caseSensitive: false),
+      RegExp(r"data-pdf-url='([^']+\.pdf)'", caseSensitive: false),
+      RegExp(r'https://pmc\.ncbi\.nlm\.nih\.gov/articles/' +
+          RegExp.escape(pmcId) +
+          r'/pdf/[A-Za-z0-9._-]+\.pdf', caseSensitive: false),
+    ];
+
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(html);
+      if (match != null) {
+        final raw = match.groupCount >= 1 ? match.group(1) ?? match.group(0) : match.group(0);
+        if (raw != null && raw.isNotEmpty) {
+          return _normalizePdfUrl(raw, pmcId);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  String _normalizePdfUrl(String raw, String pmcId) {
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      return raw;
+    }
+
+    if (raw.startsWith("//")) {
+      return "https:$raw";
+    }
+
+    if (raw.startsWith("/")) {
+      return "https://pmc.ncbi.nlm.nih.gov$raw";
+    }
+
+    return "https://pmc.ncbi.nlm.nih.gov/articles/$pmcId/$raw";
+  }
+
+  Future<List<int>> consolidateBytes(HttpClientResponse response) async {
+    final chunks = <int>[];
+    await for (final chunk in response) {
+      chunks.addAll(chunk);
+    }
+    return chunks;
+  }
+
+  String _monthName(int m) {
+    const names = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    ];
+    return names[m - 1];
+  }
+}
+

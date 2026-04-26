@@ -1,0 +1,118 @@
+import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+
+  List<Article> articles = [];
+
+  String query = "";
+  String selectedYears = "5";
+
+  final TextEditingController controller = TextEditingController();
+
+  void search() async {
+    final result = await api.searchArticles(controller.text, selectedYears);
+    setState(() {
+      articles = result;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit Review - Phase 2")),
+      body: Column(
+        children: [
+
+          Padding(
+            padding: EdgeInsets.all(10),
+            child: TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: "Enter topic (e.g. stroke AND thrombectomy)",
+                suffixIcon: IconButton(
+                  icon: Icon(Icons.search),
+                  onPressed: search,
+                ),
+              ),
+            ),
+          ),
+
+          DropdownButton<String>(
+            value: selectedYears,
+            items: [
+              DropdownMenuItem(value: "1", child: Text("Last 1 year")),
+              DropdownMenuItem(value: "5", child: Text("Last 5 years")),
+              DropdownMenuItem(value: "10", child: Text("Last 10 years")),
+            ],
+            onChanged: (value) {
+              setState(() {
+                selectedYears = value!;
+              });
+            },
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return Card(
+                  child: ListTile(
+                    title: Text(a.title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(a.authors),
+                        Text(a.journal + " (" + a.date + ")"),
+                      ],
+                    ),
+                    onTap: () {
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: Text(a.title),
+                          content: SingleChildScrollView(
+                            child: Column(
+                              children: [
+                                Text(a.authors),
+                                Text(a.journal + " (" + a.date + ")"),
+                                SizedBox(height: 10),
+                                Text(a.link),
+                              ],
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {},
+                              child: Text("Open in PubMed"),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: Text("Close"),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}

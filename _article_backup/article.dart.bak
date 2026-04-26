@@ -1,0 +1,19 @@
+class Article {
+  final String title;
+  final String abstractText;
+  final String journal;
+  final String date;
+  final String authors;
+  final String pmid;
+  final String link;
+
+  Article({
+    required this.title,
+    required this.abstractText,
+    required this.journal,
+    required this.date,
+    required this.authors,
+    required this.pmid,
+    required this.link,
+  });
+}

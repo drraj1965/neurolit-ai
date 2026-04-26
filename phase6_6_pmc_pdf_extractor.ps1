@@ -1,0 +1,275 @@
+Write-Host "=== PHASE 6.6 PMC PDF EXTRACTOR ==="
+
+$file = "lib/services/fulltext_service.dart"
+$backupDir = "_phase6_6_backup"
+
+if (!(Test-Path $file)) {
+    Write-Host "ERROR: $file not found"
+    exit 1
+}
+
+if (Test-Path $backupDir) {
+    Remove-Item $backupDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $backupDir | Out-Null
+Copy-Item $file "$backupDir/fulltext_service.dart.bak" -Force
+
+Write-Host "Backup created: $backupDir/fulltext_service.dart.bak"
+
+$newContent = @'
+import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+
+class FullTextService {
+  Future<String> downloadFullText({
+    required String pmid,
+    required String title,
+    required String pmcId,
+  }) async {
+    final baseDir = await getApplicationDocumentsDirectory();
+
+    final now = DateTime.now();
+    final year = now.year.toString();
+    final month = _monthName(now.month);
+    final dayFolder = "${now.day} $month $year";
+
+    final folder = Directory(
+      "${baseDir.path}/NeuroLit/FullText/$year/$month/$dayFolder",
+    );
+
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    final existing = await _findExistingFile(baseDir, pmid);
+    if (existing != null) {
+      return "Already downloaded:\n${existing.path}";
+    }
+
+    if (pmcId.isNotEmpty) {
+      final directPdfUrl =
+          "https://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/pdf/";
+
+      final directResult = await _tryDownloadPdf(
+        directPdfUrl,
+        "${folder.path}/$pmid.pdf",
+      );
+      if (directResult != null) {
+        return "PDF downloaded:\n$directResult";
+      }
+
+      final htmlUrl = "https://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/";
+      final html = await _fetchText(htmlUrl);
+
+      if (html != null && html.isNotEmpty) {
+        final extractedPdfUrl = _extractPdfUrlFromHtml(html, pmcId);
+
+        if (extractedPdfUrl != null) {
+          final extractedResult = await _tryDownloadPdf(
+            extractedPdfUrl,
+            "${folder.path}/$pmid.pdf",
+          );
+          if (extractedResult != null) {
+            return "PDF downloaded:\n$extractedResult";
+          }
+        }
+      }
+    }
+
+    final file = File("${folder.path}/$pmid.txt");
+    var content = "";
+    content += "PMID: $pmid\n";
+    content += "TITLE: $title\n";
+    content += "PMC: $pmcId\n";
+    content += "PDF LINK:\nhttps://www.ncbi.nlm.nih.gov/pmc/articles/$pmcId/\n";
+    content += "DOWNLOADED: ${DateTime.now()}\n";
+
+    await file.writeAsString(content);
+
+    return "Saved (PDF not directly accessible):\n${file.path}";
+  }
+
+  Future<File?> _findExistingFile(Directory baseDir, String pmid) async {
+    final root = Directory("${baseDir.path}/NeuroLit/FullText");
+
+    if (!await root.exists()) return null;
+
+    final files = root.listSync(recursive: true);
+
+    for (final f in files) {
+      if (f is File && f.path.contains(pmid)) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _fetchText(String url) async {
+    try {
+      final client = HttpClient();
+      final request = await client.getUrl(Uri.parse(url));
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        client.close(force: true);
+        return null;
+      }
+
+      final bytes = await consolidateHttpClientResponseBytes(response);
+      client.close(force: true);
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _tryDownloadPdf(String url, String outputPath) async {
+    try {
+      final client = HttpClient();
+      final request = await client.getUrl(Uri.parse(url));
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        client.close(force: true);
+        return null;
+      }
+
+      final bytes = await consolidateHttpClientResponseBytes(response);
+      client.close(force: true);
+
+      final isPdf = bytes.length > 4 &&
+          bytes[0] == 0x25 &&
+          bytes[1] == 0x50 &&
+          bytes[2] == 0x44 &&
+          bytes[3] == 0x46;
+
+      if (!isPdf) return null;
+
+      final file = File(outputPath);
+      await file.writeAsBytes(bytes);
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _extractPdfUrlFromHtml(String html, String pmcId) {
+    final patterns = <RegExp>[
+      RegExp(r'href="([^"]*?/pdf/[^"]*?\.pdf)"', caseSensitive: false),
+      RegExp(r"href='([^']*?/pdf/[^']*?\.pdf)'", caseSensitive: false),
+      RegExp(r'href="([^"]*?main\.pdf)"', caseSensitive: false),
+      RegExp(r"href='([^']*?main\.pdf)'", caseSensitive: false),
+    ];
+
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(html);
+      if (match != null) {
+        final raw = match.group(1);
+        if (raw == null || raw.isEmpty) continue;
+        return _normalizePdfUrl(raw, pmcId);
+      }
+    }
+
+    return null;
+  }
+
+  String _normalizePdfUrl(String raw, String pmcId) {
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return raw;
+    }
+
+    if (raw.startsWith('//')) {
+      return 'https:$raw';
+    }
+
+    if (raw.startsWith('/')) {
+      if (raw.contains('/articles/') || raw.contains('/pdf/')) {
+        return 'https://pmc.ncbi.nlm.nih.gov$raw';
+      }
+      return 'https://www.ncbi.nlm.nih.gov$raw';
+    }
+
+    if (raw.startsWith('articles/') || raw.startsWith('pdf/')) {
+      return 'https://pmc.ncbi.nlm.nih.gov/$raw';
+    }
+
+    return "https://pmc.ncbi.nlm.nih.gov/articles/$pmcId/$raw";
+  }
+
+  String _monthName(int m) {
+    const names = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    ];
+    return names[m - 1];
+  }
+}
+'@
+
+Set-Content -Path $file -Value $newContent -Encoding UTF8
+
+Write-Host "New file written."
+
+$written = Get-Content $file -Raw
+
+$requiredMarkers = @(
+    "Future<String> downloadFullText(",
+    "_tryDownloadPdf(",
+    "_extractPdfUrlFromHtml(",
+    "_normalizePdfUrl(",
+    "Saved (PDF not directly accessible):"
+)
+
+$missing = @()
+foreach ($marker in $requiredMarkers) {
+    if ($written -notmatch [regex]::Escape($marker)) {
+        $missing += $marker
+    }
+}
+
+if ($missing.Count -gt 0) {
+    Write-Host "VALIDATION FAILED. Missing markers:"
+    $missing | ForEach-Object { Write-Host " - $_" }
+    Write-Host "Restoring backup..."
+    Copy-Item "$backupDir/fulltext_service.dart.bak" $file -Force
+    exit 1
+}
+
+Write-Host "Validation passed."
+
+Write-Host ""
+Write-Host "Rollback command:"
+Write-Host "Copy-Item `"$backupDir/fulltext_service.dart.bak`" `"$file`" -Force"
+Write-Host ""
+
+Write-Host "Basic brace count check:"
+$openCurlies = ([regex]::Matches($written, '\{')).Count
+$closeCurlies = ([regex]::Matches($written, '\}')).Count
+$openParens = ([regex]::Matches($written, '\(')).Count
+$closeParens = ([regex]::Matches($written, '\)')).Count
+
+Write-Host "Curly braces: $openCurlies open / $closeCurlies close"
+Write-Host "Parentheses : $openParens open / $closeParens close"
+
+if ($openCurlies -ne $closeCurlies -or $openParens -ne $closeParens) {
+    Write-Host "WARNING: delimiter counts do not match. Inspect file before build."
+} else {
+    Write-Host "Delimiter counts look balanced."
+}
+
+Write-Host ""
+Write-Host "Next:"
+Write-Host "flutter clean"
+Write-Host "flutter run -d windows"

@@ -1,0 +1,17 @@
+class SummaryService {
+
+  String generateStructuredSummary(String text) {
+
+    if (text.trim().isEmpty) return "No abstract available.";
+
+    if (text.length < 300) return text;
+
+    int mid = text.length ~/ 2;
+
+    return "BACKGROUND:\n" +
+        text.substring(0, 300) +
+        "\n\nKEY POINTS:\n" +
+        text.substring(mid, mid + 200 > text.length ? text.length : mid + 200) +
+        "\n\nCLINICAL TAKEAWAY:\nDerived from study findings.";
+  }
+}

@@ -1,0 +1,245 @@
+# ==============================
+# PHASE 5 MASTER UPGRADE
+# ==============================
+
+Write-Host "=== PHASE 5 MASTER UPGRADE ==="
+
+$BackupDir = "_phase5_backup"
+
+if (Test-Path $BackupDir) {
+    Remove-Item $BackupDir -Recurse -Force
+}
+
+New-Item -ItemType Directory -Path $BackupDir | Out-Null
+
+$homeFile = "lib/screens/home_screen.dart"
+$exportFile = "lib/services/export_service.dart"
+
+Copy-Item $homeFile "$BackupDir/home_screen.dart.bak"
+
+Write-Host "Backup created."
+
+# ==============================
+# PATCH 1: EXPORT SERVICE
+# ==============================
+
+@'
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+
+class ExportService {
+
+  Future<void> exportDocx(String content) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File(dir.path + "/review.docx");
+    await file.writeAsString(content);
+  }
+
+  Future<void> exportTxt(String content) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File(dir.path + "/review.txt");
+    await file.writeAsString(content);
+  }
+}
+'@ | Set-Content $exportFile -Encoding UTF8
+
+# ==============================
+# PATCH 2: HOME SCREEN (REVIEW + SAVE)
+# ==============================
+
+@'
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
+import '../services/api_service.dart';
+import '../services/summary_service.dart';
+import '../services/export_service.dart';
+import '../models/article.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  final ApiService api = ApiService();
+  final SummaryService summary = SummaryService();
+  final ExportService export = ExportService();
+
+  List<Article> articles = [];
+  Set<int> selected = {};
+
+  final TextEditingController controller = TextEditingController();
+
+  void search() async {
+    final result = await api.searchArticles(controller.text);
+    setState(() {
+      articles = result;
+      selected.clear();
+    });
+  }
+
+  String buildReview(List<Article> selectedArticles, String aiText) {
+
+    String refs = "";
+    int i = 1;
+
+    for (var a in selectedArticles) {
+      refs += "[" + i.toString() + "] " +
+          a.authors + ". " +
+          a.title + ". " +
+          a.journal + ". " +
+          a.date + ".\n\n";
+      i++;
+    }
+
+    return "REVIEW ARTICLE\n\n" +
+        aiText +
+        "\n\nREFERENCES:\n\n" +
+        refs;
+  }
+
+  void generateReview() async {
+
+    final selectedArticles = selected.map((i) => articles[i]).toList();
+
+    if (selectedArticles.isEmpty) return;
+
+    final data = selectedArticles.map((a) => {
+      "title": a.title,
+      "authors": a.authors,
+      "abstract": a.abstractText
+    }).toList();
+
+    showDialog(
+      context: context,
+      builder: (_) => Center(child: CircularProgressIndicator()),
+    );
+
+    final aiText = await summary.generateMultiArticleSummary(data);
+
+    Navigator.pop(context);
+
+    final review = buildReview(selectedArticles, aiText);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text("REVIEW ARTICLE"),
+        content: SingleChildScrollView(
+          child: SelectableText(review),
+        ),
+        actions: [
+
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: review));
+            },
+            child: Text("Copy"),
+          ),
+
+          TextButton(
+            onPressed: () {
+              export.exportDocx(review);
+            },
+            child: Text("DOCX"),
+          ),
+
+          TextButton(
+            onPressed: () {
+              export.exportTxt(review);
+            },
+            child: Text("TXT"),
+          ),
+
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> saveCollection() async {
+
+    final prefs = await SharedPreferences.getInstance();
+
+    final selectedArticles = selected.map((i) => articles[i].title).toList();
+
+    await prefs.setStringList("saved_collection", selectedArticles);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Collection saved")),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: Text("NeuroLit AI - Phase 5")),
+      body: Column(
+        children: [
+
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Search topic",
+              suffixIcon: IconButton(
+                icon: Icon(Icons.search),
+                onPressed: search,
+              ),
+            ),
+          ),
+
+          Row(
+            children: [
+              ElevatedButton(
+                onPressed: generateReview,
+                child: Text("Generate Review"),
+              ),
+              SizedBox(width: 10),
+              ElevatedButton(
+                onPressed: saveCollection,
+                child: Text("Save Collection"),
+              ),
+            ],
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: articles.length,
+              itemBuilder: (context, index) {
+
+                final a = articles[index];
+
+                return ListTile(
+                  leading: Checkbox(
+                    value: selected.contains(index),
+                    onChanged: (val) {
+                      setState(() {
+                        if (val!) selected.add(index);
+                        else selected.remove(index);
+                      });
+                    },
+                  ),
+                  title: Text(a.title),
+                  subtitle: Text(a.authors),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}
+'@ | Set-Content $homeFile -Encoding UTF8
+
+Write-Host ""
+Write-Host "✅ PHASE 5 COMPLETE"
+Write-Host "Run:"
+Write-Host "flutter clean"
+Write-Host "flutter run -d windows"
