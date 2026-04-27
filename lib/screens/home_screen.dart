@@ -301,6 +301,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     await loadAvailableRunProviders();
+    await loadRecentSearches();
+    await loadCollections();
     if (!mounted) return;
     setState(() {});
   }

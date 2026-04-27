@@ -1,5 +1,5 @@
 #define MyAppName "NeuroLit AI"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "NeuroLit AI"
 #define MyAppExeName "neurolit_review_app.exe"
 #define MyReleaseDir "..\build\windows\x64\runner\Release"
@@ -11,7 +11,7 @@ AppId={{8C43734E-2C31-4B66-8D79-9F0B9E1A8A4C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={pf}\NeuroLit AI
+DefaultDirName={autopf}\NeuroLit AI
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -24,6 +24,9 @@ OutputDir=output
 OutputBaseFilename=NeuroLit_Setup
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupLogging=yes
+CloseApplications=yes
+CloseApplicationsFilter={#MyAppExeName},neurolit_backend.exe
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

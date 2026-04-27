@@ -1,83 +1,51 @@
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../models/literature_mode.dart';
+import 'storage/neuro_lit_path_service.dart';
 
 class ModeWorkspaceService {
-  Future<Directory> getAppRoot() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final root = Directory('${dir.path}/NeuroLit');
-    if (!await root.exists()) {
-      await root.create(recursive: true);
-    }
-    return root;
-  }
+  ModeWorkspaceService({
+    NeuroLitPathService? pathService,
+  }) : pathService = pathService ?? NeuroLitPathService();
+
+  final NeuroLitPathService pathService;
+
+  Future<Directory> getAppRoot() => pathService.getRootFolder();
 
   Future<Directory> getModeRoot(
     LiteratureMode mode, {
     bool create = true,
   }) async {
-    final appRoot = await getAppRoot();
-    final root = Directory('${appRoot.path}/${mode.workspaceFolderName}');
-    if (create && !await root.exists()) {
-      await root.create(recursive: true);
-    }
-    return root;
+    return pathService.getModeRootFolder(mode, create: create);
   }
 
   Future<Directory> getCollectionsDirectory(
     LiteratureMode mode, {
     bool create = true,
   }) async {
-    final modeRoot = await getModeRoot(mode, create: create);
-    final dir = Directory('${modeRoot.path}/Collections');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    return pathService.getCollectionsFolder(mode: mode, create: create);
   }
 
   Future<Directory> getLegacyCollectionsDirectory({bool create = true}) async {
-    final appRoot = await getAppRoot();
-    final dir = Directory('${appRoot.path}/Collections');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    return pathService.getCollectionsFolder(create: create);
   }
 
   Future<Directory> getExportsDirectory(
     LiteratureMode mode, {
     bool create = true,
   }) async {
-    final modeRoot = await getModeRoot(mode, create: create);
-    final dir = Directory('${modeRoot.path}/Exports');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    return pathService.getExportsFolder(mode: mode, create: create);
   }
 
   Future<Directory> getFullTextRoot(
     LiteratureMode mode, {
     bool create = true,
   }) async {
-    final modeRoot = await getModeRoot(mode, create: create);
-    final dir = Directory('${modeRoot.path}/FullText');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    return pathService.getFullTextFolder(mode: mode, create: create);
   }
 
   Future<Directory> getLegacyFullTextRoot({bool create = true}) async {
-    final appRoot = await getAppRoot();
-    final dir = Directory('${appRoot.path}/FullText');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    return pathService.getFullTextFolder(create: create);
   }
 
   Future<Directory> getTopicDirectory({
@@ -86,16 +54,12 @@ class ModeWorkspaceService {
     required String topic,
     bool create = true,
   }) async {
-    final fullTextRoot = await getFullTextRoot(mode, create: create);
-    final month = monthName(date.month);
-    final dayFolder = '${date.day} $month ${date.year}';
-    final topicDir = Directory(
-      '${fullTextRoot.path}/${date.year}/$month/$dayFolder/$topic',
+    return pathService.getTopicFolder(
+      mode: mode,
+      date: date,
+      topic: topic,
+      create: create,
     );
-    if (create && !await topicDir.exists()) {
-      await topicDir.create(recursive: true);
-    }
-    return topicDir;
   }
 
   Future<Directory> getSummariesDirectory({
@@ -104,17 +68,12 @@ class ModeWorkspaceService {
     required String topic,
     bool create = true,
   }) async {
-    final topicDir = await getTopicDirectory(
+    return pathService.getSummariesFolder(
       mode: mode,
       date: date,
       topic: topic,
       create: create,
     );
-    final dir = Directory('${topicDir.path}/summaries');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
   }
 
   Future<Directory> getPptDirectory({
@@ -123,17 +82,12 @@ class ModeWorkspaceService {
     required String topic,
     bool create = true,
   }) async {
-    final topicDir = await getTopicDirectory(
+    return pathService.getPptFolder(
       mode: mode,
       date: date,
       topic: topic,
       create: create,
     );
-    final dir = Directory('${topicDir.path}/PPTx');
-    if (create && !await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
   }
 
   Future<Directory> getFullTextArtifactsDirectory({
@@ -162,21 +116,6 @@ class ModeWorkspaceService {
   String get legacyRecentSearchPreferenceKey => 'recent_searches_v1';
 
   String monthName(int month) {
-    const names = [
-      '',
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
-    ];
-    return names[month];
+    return pathService.monthName(month);
   }
 }

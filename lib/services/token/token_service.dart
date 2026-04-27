@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../models/ai_provider_profile.dart';
+import '../storage/neuro_lit_path_service.dart';
 import 'token_usage_models.dart';
 
 class TokenService {
@@ -17,17 +17,13 @@ class TokenService {
 
   TokenService._internal();
 
+  final NeuroLitPathService _pathService = NeuroLitPathService();
+
   int lastUsage = 0;
   final ValueNotifier<int> lastUsageNotifier = ValueNotifier<int>(0);
 
   Future<File> _getFile() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final tokenDir = Directory("${dir.path}/NeuroLit");
-    if (!await tokenDir.exists()) {
-      await tokenDir.create(recursive: true);
-    }
-    final file = File("${tokenDir.path}/token_usage.json");
-    return file;
+    return _pathService.getTokenUsageFile();
   }
 
   Future<void> logUsage(

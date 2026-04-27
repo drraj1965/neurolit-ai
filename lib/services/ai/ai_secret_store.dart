@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:path_provider/path_provider.dart';
+import '../storage/neuro_lit_path_service.dart';
 
 class AiSecretStore {
-  static const _fileName = 'ai_provider_secrets_v1.json';
   static const _windowsSecurePrefix = 'win_ps_secure:';
   static const _windowsLegacyPrefix = 'win_legacy_dpapi:';
+  final NeuroLitPathService _pathService = NeuroLitPathService();
 
   Future<void> writeSecret(String secretId, String secret) async {
     final payload = await _readPayload();
@@ -73,14 +73,7 @@ class AiSecretStore {
   }
 
   Future<File> _getSecretsFile() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final secretDir = Directory('${dir.path}/NeuroLit');
-
-    if (!await secretDir.exists()) {
-      await secretDir.create(recursive: true);
-    }
-
-    return File('${secretDir.path}/$_fileName');
+    return _pathService.getProviderSecretsFile();
   }
 
   Future<String> _protectForWindows(String plainText) async {

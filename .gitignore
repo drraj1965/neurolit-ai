@@ -27,11 +27,26 @@ migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.dart_appdata/
 .flutter-plugins-dependencies
+.flutter-plugins
 .pub-cache/
 .pub/
 /build/
 /coverage/
+/windows/flutter/ephemeral/
+/linux/flutter/ephemeral/
+/macos/Flutter/ephemeral/
+**/.plugin_symlinks/
+/installer/output/
+/backend/.venv/
+/backend/build/
+/backend/dist/
+/release_artifacts/
+/NeuroLit/
+/backup/
+/.codex_appdata/
+/.codex_localappdata/
 
 # Symbolication related
 app.*.symbols

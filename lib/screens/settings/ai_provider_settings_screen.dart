@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../models/ai_provider_profile.dart';
@@ -5,9 +7,11 @@ import '../../models/app_update_models.dart';
 import '../../services/ai/ai_model_catalog.dart';
 import '../../services/ai/ai_provider_router.dart';
 import '../../services/ai/ai_provider_store.dart';
+import '../../services/storage/neuro_lit_path_service.dart';
 import '../../services/update_service.dart';
 import '../../services/token/token_service.dart';
 import 'ai_provider_edit_screen.dart';
+import 'widgets/data_folder_settings_card.dart';
 import 'widgets/update_settings_card.dart';
 
 class AiProviderSettingsScreen extends StatefulWidget {
@@ -25,14 +29,18 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
     tokenService: TokenService(),
   );
   final UpdateService _updateService = UpdateService();
+  final NeuroLitPathService _pathService = NeuroLitPathService();
 
   bool _loading = true;
   bool _checkingForUpdates = false;
+  bool _changingDataFolder = false;
   List<AiProviderProfile> _profiles = const [];
   UpdateSettings _updateSettings = const UpdateSettings(
     frequency: UpdateFrequency.weekly,
   );
   UpdateCheckResult? _latestUpdateResult;
+  String _activeDataFolderPath = '';
+  String _defaultDataFolderPath = '';
 
   @override
   void initState() {
@@ -68,6 +76,15 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
           onFrequencyChanged: _changeUpdateFrequency,
           onCheckPressed: _checkForUpdates,
           onInstallPressed: _installUpdate,
+        ),
+        const SizedBox(height: 16),
+        DataFolderSettingsCard(
+          activeFolderPath: _activeDataFolderPath,
+          defaultFolderPath: _defaultDataFolderPath,
+          isBusy: _changingDataFolder,
+          onChooseFolder: _chooseDataFolder,
+          onOpenFolder: _openDataFolder,
+          onResetToDefault: _resetDataFolder,
         ),
         const SizedBox(height: 16),
         Container(
@@ -182,11 +199,15 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
 
     final profiles = await _store.getProfiles();
     final updateSettings = await _updateService.loadSettings();
+    final activeDataFolderPath = await _pathService.getActiveRootPath();
+    final defaultDataFolderPath = await _pathService.getDefaultRootPath();
 
     if (!mounted) return;
     setState(() {
       _profiles = profiles;
       _updateSettings = updateSettings;
+      _activeDataFolderPath = activeDataFolderPath;
+      _defaultDataFolderPath = defaultDataFolderPath;
       _loading = false;
     });
   }
@@ -377,5 +398,107 @@ class _AiProviderSettingsScreenState extends State<AiProviderSettingsScreen> {
         SnackBar(content: Text('Unable to launch update: $e')),
       );
     }
+  }
+
+  Future<void> _chooseDataFolder() async {
+    setState(() {
+      _changingDataFolder = true;
+    });
+
+    try {
+      final selectedPath = await _pathService.chooseFolderPath();
+      if (selectedPath == null || selectedPath.trim().isEmpty) {
+        return;
+      }
+
+      final directory = Directory(selectedPath);
+      await _pathService.ensureDirectoryExists(directory);
+      await _pathService.setOverridePath(directory.path);
+      await _loadProfiles();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NeuroLit data folder updated')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      await _showStorageErrorDialog(
+        'Unable to use the selected folder',
+        e.toString(),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _changingDataFolder = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openDataFolder() async {
+    setState(() {
+      _changingDataFolder = true;
+    });
+
+    try {
+      await _pathService.openFolderPath(_activeDataFolderPath);
+    } catch (e) {
+      if (!mounted) return;
+      await _showStorageErrorDialog(
+        'Unable to open the NeuroLit data folder',
+        e.toString(),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _changingDataFolder = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _resetDataFolder() async {
+    setState(() {
+      _changingDataFolder = true;
+    });
+
+    try {
+      await _pathService.setOverridePath(null);
+      await _pathService.getRootFolder(create: true);
+      await _loadProfiles();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NeuroLit data folder reset to default')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      await _showStorageErrorDialog(
+        'Unable to reset the NeuroLit data folder',
+        e.toString(),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _changingDataFolder = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showStorageErrorDialog(String title, String message) {
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 }
